@@ -1,6 +1,6 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
-import { compareVersion, ProofStore, RULES } from './store';
+import { compareVersion, ProofStore, REVIEW_STATUS_LABEL, REVIEW_STATUSES, RULES } from './store';
 import type { ProofDocument, ProofStep } from './types';
 
 const store = new ProofStore();
@@ -65,6 +65,10 @@ function exportMarkdown(document: ProofDocument): string {
     if (step.note) lines.push(`- 旁注：${step.note}`);
     if (step.counterexample) lines.push(`- 反例：${step.counterexample}`);
     if (step.alternative) lines.push(`- 替代分支：${step.alternative}`);
+    if (step.review?.status === 'approved') {
+      const reviewer = step.review.reviewer ? `（审阅人：${step.review.reviewer}）` : '';
+      lines.push(`- 审阅意见：${step.review.comment || '审阅通过'}${reviewer}`);
+    }
     lines.push('');
   });
   lines.push('## 符号表');
@@ -79,6 +83,10 @@ function exportLatex(document: ProofDocument): string {
     const support = refs.length ? `（依据 ${refs.join(', ')}；${step.rule}）` : `（${step.rule}）`;
     lines.push(`  \\item ${step.statement} ${support}`);
     if (step.note) lines.push(`  \\par\\small 旁注：${step.note}`);
+    if (step.review?.status === 'approved') {
+      const reviewer = step.review.reviewer ? `（${step.review.reviewer}）` : '';
+      lines.push(`  \\par\\small 审阅意见：${step.review.comment || '审阅通过'}${reviewer}`);
+    }
   });
   lines.push('\\end{enumerate}', '\\end{document}');
   return lines.join('\n');
@@ -145,6 +153,18 @@ export class ProofApp implements Component {
     const checks = store.checks;
     const errors = checks.filter((check) => check.severity === 'error').length;
     const warnings = checks.filter((check) => check.severity === 'warning').length;
+    const approvedCount = document.steps.filter((step) => step.review?.status === 'approved').length;
+    const pendingCount = document.steps.filter((step) => (step.review?.status ?? 'pending') === 'pending').length;
+    const deferredCount = document.steps.filter((step) => step.review?.status === 'deferred').length;
+    const reviewOpen = pendingCount + deferredCount;
+    const reviewProgress = document.steps.length ? Math.round((approvedCount / document.steps.length) * 100) : 0;
+    const finalizeText = errors
+      ? '修正错误后再保存为定稿。'
+      : reviewOpen
+        ? `审阅未完成：${pendingCount} 步待改、${deferredCount} 步暂缓，暂不能定稿。`
+        : warnings
+          ? '结构有效，仍有待核对项。'
+          : '全部步骤已通过审阅，可以定稿。';
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
     const diff = selectedVersion ? compareVersion(document, selectedVersion) : [];
 
@@ -156,7 +176,9 @@ export class ProofApp implements Component {
         ]),
         m('div.topbar-center', [
           m('span.status-dot', { class: errors ? 'has-error' : 'is-ok' }),
-          errors ? `${errors} 个结构错误` : '证明结构可检查',
+          errors ? `${errors} 个结构错误` : reviewOpen ? `${reviewOpen} 步待审阅` : '证明结构可检查',
+          m('span.topbar-separator'),
+          `审阅通过 ${approvedCount}/${document.steps.length}`,
           m('span.topbar-separator'),
           `自动保存于 ${new Date(document.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`,
         ]),
@@ -197,9 +219,10 @@ export class ProofApp implements Component {
               m('span.check-total', { class: errors ? 'has-error' : '' }, errors + warnings),
             ]),
             m('div.check-summary-bars', [
-              m('span', { style: { width: `${Math.max(8, 100 - errors * 24 - warnings * 12)}%` } }),
+              m('span', { style: { width: `${Math.max(6, reviewProgress)}%` } }),
             ]),
-            m('p', errors ? '修正错误后再保存为定稿。' : warnings ? '结构有效，仍有待核对项。' : '当前结构与引用关系完整。'),
+            m('p', finalizeText),
+            m('p.review-progress', `审阅通过 ${approvedCount}/${document.steps.length} · 待改 ${pendingCount} · 暂缓 ${deferredCount}`),
           ]),
         ]),
         m('section.editor-column', [
@@ -250,6 +273,7 @@ export class ProofApp implements Component {
                 m('div.step-head', [
                   m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : 'is-light' }, typeLabel[step.type]),
                   m('span.rule-chip', step.rule),
+                  m('span.review-tag', { class: `is-${step.review?.status ?? 'pending'}` }, REVIEW_STATUS_LABEL[step.review?.status ?? 'pending']),
                   m('span.step-id', `#${shortId(step.id)}`),
                   stepChecks.length > 0 && m('span.issue-badge', `${stepChecks.length} 项检查`),
                   m('button.step-menu', { onclick: (event: Event) => { event.stopPropagation(); store.removeStep(step.id); m.redraw(); }, title: '删除步骤' }, '×'),
@@ -263,6 +287,7 @@ export class ProofApp implements Component {
                   step.note && m('span.has-note', '含旁注'),
                   step.counterexample && m('span.has-counterexample', '含反例'),
                   step.alternative && m('span.has-branch', '含替代分支'),
+                  step.review?.comment && m('span.has-review', '含审阅意见'),
                 ]),
               ]),
             ]);
@@ -319,6 +344,27 @@ export class ProofApp implements Component {
               m('div', [m('label.field-label', '反例 / 边界情况'), m('textarea.textarea.is-small', { rows: 2, value: selected.counterexample, placeholder: '尝试寻找反例', oninput: (event: Event) => store.updateStep({ counterexample: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '替代分支'), m('textarea.textarea.is-small', { rows: 2, value: selected.alternative, placeholder: '另一种可行推导', oninput: (event: Event) => store.updateStep({ alternative: (event.target as HTMLTextAreaElement).value }) })]),
             ]),
+            m('div.review-box', [
+              m('label.field-label', '审阅状态（通过后再编辑将自动退回待改）'),
+              m('div.review-status-row', REVIEW_STATUSES.map((status) => m('button.review-status-button', {
+                class: `${selected.review?.status === status ? 'is-active ' : ''}is-${status}`,
+                onclick: () => { store.setReviewStatus(selected.id, status); m.redraw(); },
+              }, REVIEW_STATUS_LABEL[status]))),
+              m('label.field-label', '审阅人'),
+              m('input.input.is-small', {
+                value: selected.review?.reviewer ?? '',
+                placeholder: '填写审阅人姓名',
+                oninput: (event: Event) => store.updateReview(selected.id, { reviewer: (event.target as HTMLInputElement).value }),
+              }),
+              m('label.field-label', '修改建议 / 审阅意见'),
+              m('textarea.textarea.is-small', {
+                rows: 2,
+                value: selected.review?.comment ?? '',
+                placeholder: '记录需要修改的内容或审阅结论',
+                oninput: (event: Event) => store.updateReview(selected.id, { comment: (event.target as HTMLTextAreaElement).value }),
+              }),
+              selected.review?.updatedAt && m('p.review-updated', `审阅更新于 ${new Date(selected.review.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`),
+            ]),
             m('button.button.is-small.is-white.is-fullwidth.add-symbol', {
               onclick: () => {
                 const symbol = window.prompt('输入符号名称');
@@ -370,8 +416,14 @@ export class ProofApp implements Component {
             m('div.diff-row.diff-header', [m('span', '位置'), m('span', '旧版本'), m('span', '当前版本')]),
             ...diff.map((item) => m('div.diff-row', { class: `is-${item.kind}` }, [
               m('span.diff-label', item.label),
-              m('span', item.before || '—'),
-              m('span', item.after || '—'),
+              m('span', [
+                item.before || '—',
+                item.reviewBefore && m('small.diff-review', `审阅：${item.reviewBefore}`),
+              ]),
+              m('span', [
+                item.after || '—',
+                item.reviewAfter && m('small.diff-review', `审阅：${item.reviewAfter}`),
+              ]),
             ])),
           ]),
         ]),

@@ -1,5 +1,13 @@
 export type StepType = 'premise' | 'derivation' | 'goal';
 export type CheckSeverity = 'error' | 'warning' | 'info';
+export type ReviewStatus = 'pending' | 'approved' | 'deferred';
+
+export interface ReviewRecord {
+  status: ReviewStatus;
+  reviewer: string;
+  comment: string;
+  updatedAt: string;
+}
 
 export interface ProofStep {
   id: string;
@@ -10,6 +18,7 @@ export interface ProofStep {
   note: string;
   counterexample: string;
   alternative: string;
+  review: ReviewRecord;
 }
 
 export interface ProofVersion {
@@ -44,4 +53,6 @@ export interface ProofDiff {
   label: string;
   before: string;
   after: string;
+  reviewBefore: string;
+  reviewAfter: string;
 }

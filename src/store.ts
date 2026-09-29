@@ -1,5 +1,5 @@
 import { redraw } from 'mithril';
-import type { ProofCheck, ProofDocument, ProofStep, ProofVersion } from './types';
+import type { ProofCheck, ProofDiff, ProofDocument, ProofStep, ProofVersion, ReviewRecord, ReviewStatus } from './types';
 
 const STORAGE_KEY = 'sologsb-1014-proof-workspace-v1';
 const uid = (prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
@@ -7,22 +7,47 @@ const clone = <T>(value: T): T => structuredClone(value);
 
 export const RULES = ['前提', '定义展开', '代入', '等式变形', '分配律', '同类项合并', '数学归纳', '反证法', '构造法', '结论'];
 
+export const REVIEW_STATUSES: ReviewStatus[] = ['pending', 'approved', 'deferred'];
+export const REVIEW_STATUS_LABEL: Record<ReviewStatus, string> = {
+  pending: '待改',
+  approved: '通过',
+  deferred: '暂缓',
+};
+
+export function defaultReview(): ReviewRecord {
+  return { status: 'pending', reviewer: '', comment: '', updatedAt: '' };
+}
+
+function makeReview(status: ReviewStatus, reviewer = '', comment = ''): ReviewRecord {
+  return { status, reviewer, comment, updatedAt: reviewer || comment ? new Date().toISOString() : '' };
+}
+
+export function formatReview(record?: ReviewRecord): string {
+  if (!record) return '';
+  const parts = [REVIEW_STATUS_LABEL[record.status]];
+  if (record.reviewer) parts.push(record.reviewer);
+  if (record.comment) parts.push(record.comment);
+  return parts.join(' · ');
+}
+
+const STEP_CONTENT_KEYS: (keyof ProofStep)[] = ['type', 'statement', 'rule', 'references', 'note', 'counterexample', 'alternative'];
+
 function sampleSteps(): ProofStep[] {
   return [
-    { id: 's1', type: 'premise', statement: '$a,b$ 是实数', rule: '前提', references: [], note: '采用实数域中的交换律与分配律。', counterexample: '', alternative: '' },
-    { id: 's2', type: 'derivation', statement: '$(a+b)^2=(a+b)(a+b)$', rule: '定义展开', references: ['s1'], note: '把平方写成两个相同因式之积。', counterexample: '', alternative: '' },
-    { id: 's3', type: 'derivation', statement: '$(a+b)(a+b)=a^2+ab+ba+b^2$', rule: '分配律', references: ['s2'], note: '', counterexample: '', alternative: '也可先展开后半部分。' },
-    { id: 's4', type: 'derivation', statement: '$a^2+ab+ba+b^2=a^2+2ab+b^2$', rule: '同类项合并', references: ['s3'], note: '由实数的交换律，$ab=ba$。', counterexample: '', alternative: '' },
-    { id: 's5', type: 'goal', statement: '$(a+b)^2=a^2+2ab+b^2$', rule: '结论', references: ['s4'], note: '目标已由步骤 1 至 4 逐项推出。', counterexample: '', alternative: '' },
+    { id: 's1', type: 'premise', statement: '$a,b$ 是实数', rule: '前提', references: [], note: '采用实数域中的交换律与分配律。', counterexample: '', alternative: '', review: makeReview('approved', '王教研', '前提范围明确，可以采用。') },
+    { id: 's2', type: 'derivation', statement: '$(a+b)^2=(a+b)(a+b)$', rule: '定义展开', references: ['s1'], note: '把平方写成两个相同因式之积。', counterexample: '', alternative: '', review: makeReview('approved', '王教研') },
+    { id: 's3', type: 'derivation', statement: '$(a+b)(a+b)=a^2+ab+ba+b^2$', rule: '分配律', references: ['s2'], note: '', counterexample: '', alternative: '也可先展开后半部分。', review: makeReview('pending', '王教研', '建议补充分配律两次使用的顺序说明。') },
+    { id: 's4', type: 'derivation', statement: '$a^2+ab+ba+b^2=a^2+2ab+b^2$', rule: '同类项合并', references: ['s3'], note: '由实数的交换律，$ab=ba$。', counterexample: '', alternative: '', review: makeReview('deferred', '李教研', '交换律的引用格式待教研组统一表述后再定。') },
+    { id: 's5', type: 'goal', statement: '$(a+b)^2=a^2+2ab+b^2$', rule: '结论', references: ['s4'], note: '目标已由步骤 1 至 4 逐项推出。', counterexample: '', alternative: '', review: makeReview('pending') },
   ];
 }
 
 function issueSteps(): ProofStep[] {
   return [
-    { id: 'i1', type: 'premise', statement: '$n$ 是正整数', rule: '前提', references: [], note: '', counterexample: '', alternative: '' },
-    { id: 'i2', type: 'derivation', statement: '$P(1)$ 成立', rule: '前提', references: ['i1'], note: '归纳基例。', counterexample: '', alternative: '' },
-    { id: 'i3', type: 'derivation', statement: '若 $P(k)$ 成立，则 $P(k+1)$ 也成立', rule: '数学归纳', references: ['missing-step'], note: '这里故意保留一个失效引用，用于演示检查。', counterexample: '', alternative: '' },
-    { id: 'i4', type: 'goal', statement: '$P(n)$ 对所有正整数 $n$ 成立', rule: '结论', references: ['i3'], note: '尚未补齐归纳假设。', counterexample: '', alternative: '' },
+    { id: 'i1', type: 'premise', statement: '$n$ 是正整数', rule: '前提', references: [], note: '', counterexample: '', alternative: '', review: makeReview('pending') },
+    { id: 'i2', type: 'derivation', statement: '$P(1)$ 成立', rule: '前提', references: ['i1'], note: '归纳基例。', counterexample: '', alternative: '', review: makeReview('pending') },
+    { id: 'i3', type: 'derivation', statement: '若 $P(k)$ 成立，则 $P(k+1)$ 也成立', rule: '数学归纳', references: ['missing-step'], note: '这里故意保留一个失效引用，用于演示检查。', counterexample: '', alternative: '', review: makeReview('pending', '王教研', '先修复失效引用，再送审这一步。') },
+    { id: 'i4', type: 'goal', statement: '$P(n)$ 对所有正整数 $n$ 成立', rule: '结论', references: ['i3'], note: '尚未补齐归纳假设。', counterexample: '', alternative: '', review: makeReview('pending') },
   ];
 }
 
@@ -52,12 +77,26 @@ function initialDocuments(): ProofDocument[] {
   ];
 }
 
+function normalizeDocuments(documents: ProofDocument[]): ProofDocument[] {
+  documents.forEach((document) => {
+    document.steps.forEach((step) => {
+      if (!step.review) step.review = defaultReview();
+    });
+    document.versions?.forEach((version) => {
+      version.steps.forEach((step) => {
+        if (!step.review) step.review = defaultReview();
+      });
+    });
+  });
+  return documents;
+}
+
 function loadDocuments(): ProofDocument[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return initialDocuments();
     const parsed = JSON.parse(raw) as ProofDocument[];
-    return Array.isArray(parsed) && parsed.length ? parsed : initialDocuments();
+    return Array.isArray(parsed) && parsed.length ? normalizeDocuments(parsed) : initialDocuments();
   } catch {
     return initialDocuments();
   }
@@ -72,6 +111,7 @@ export class ProofStore {
   lastInput: HTMLTextAreaElement | HTMLInputElement | null = null;
   undoStack: ProofDocument[][] = [];
   redoStack: ProofDocument[][] = [];
+  lastReviewer = '';
   toast = '';
 
   get current(): ProofDocument {
@@ -143,7 +183,7 @@ export class ProofStore {
       author: '本地用户',
       goal: '$A=B$',
       symbols: { A: '待定义对象', B: '待定义对象' },
-      steps: [{ id: uid('step'), type: 'premise', statement: '在这里输入前提', rule: '前提', references: [], note: '', counterexample: '', alternative: '' }],
+      steps: [{ id: uid('step'), type: 'premise', statement: '在这里输入前提', rule: '前提', references: [], note: '', counterexample: '', alternative: '', review: defaultReview() }],
       versions: [],
       updatedAt: new Date().toISOString(),
     };
@@ -175,6 +215,7 @@ export class ProofStore {
       note: '',
       counterexample: '',
       alternative: '',
+      review: defaultReview(),
     };
     this.update((document) => {
       const selectedIndex = document.steps.findIndex((item) => item.id === this.selectedStepId);
@@ -206,9 +247,38 @@ export class ProofStore {
 
   updateStep(patch: Partial<ProofStep>): void {
     const id = this.selectedStepId;
+    let reverted = false;
     this.update((document) => {
       const step = document.steps.find((item) => item.id === id);
-      if (step) Object.assign(step, patch);
+      if (!step) return;
+      const contentChanged = STEP_CONTENT_KEYS.some(
+        (key) => key in patch && JSON.stringify(patch[key]) !== JSON.stringify(step[key]),
+      );
+      Object.assign(step, patch);
+      if (contentChanged && step.review?.status === 'approved') {
+        step.review = { ...step.review, status: 'pending', updatedAt: new Date().toISOString() };
+        reverted = true;
+      }
+    });
+    if (reverted) this.notify('已通过的步骤被修改，审阅状态已退回“待改”');
+  }
+
+  updateReview(stepId: string, patch: Partial<ReviewRecord>): void {
+    this.update((document) => {
+      const step = document.steps.find((item) => item.id === stepId);
+      if (!step) return;
+      step.review = { ...step.review, ...patch, updatedAt: new Date().toISOString() };
+      if (patch.reviewer) this.lastReviewer = patch.reviewer;
+    });
+  }
+
+  setReviewStatus(stepId: string, status: ReviewStatus): void {
+    this.update((document) => {
+      const step = document.steps.find((item) => item.id === stepId);
+      if (!step) return;
+      const reviewer = step.review.reviewer || this.lastReviewer;
+      step.review = { ...step.review, status, reviewer, updatedAt: new Date().toISOString() };
+      if (reviewer) this.lastReviewer = reviewer;
     });
   }
 
@@ -260,6 +330,25 @@ export function validate(document: ProofDocument): ProofCheck[] {
         checks.push({ id: `missing-${step.id}-${reference}`, severity: 'error', title: '引用步骤不存在', detail: `步骤 ${index + 1} 引用了已删除的步骤 ${reference}`, stepId: step.id });
       }
     });
+
+    const reviewStatus = step.review?.status ?? 'pending';
+    if (reviewStatus === 'pending') {
+      checks.push({
+        id: `review-${step.id}`,
+        severity: 'warning',
+        title: '步骤待修改',
+        detail: `步骤 ${index + 1} 尚未通过审阅${step.review?.comment ? `，审阅意见：${step.review.comment}` : '。'}`,
+        stepId: step.id,
+      });
+    } else if (reviewStatus === 'deferred') {
+      checks.push({
+        id: `review-${step.id}`,
+        severity: 'warning',
+        title: '步骤暂缓审阅',
+        detail: `步骤 ${index + 1} 暂缓定论${step.review?.comment ? `，备注：${step.review.comment}` : '。'}`,
+        stepId: step.id,
+      });
+    }
   });
 
   const graph = new Map(document.steps.map((step) => [step.id, step.references.filter((id) => ids.has(id))]));
@@ -290,20 +379,51 @@ export function validate(document: ProofDocument): ProofCheck[] {
     checks.push({ id: 'goal-unlinked', severity: 'warning', title: '结论尚无推导支撑', detail: '最终步骤没有引用任何前置步骤。', stepId: goalStep.id });
   }
 
-  if (!checks.some((check) => check.severity === 'error')) {
-    checks.push({ id: 'proof-ok', severity: 'info', title: '结构检查通过', detail: '未发现缺失引用、循环引用或未证明目标。' });
+  const hasError = checks.some((check) => check.severity === 'error');
+  if (hasError) return checks;
+
+  const pendingCount = document.steps.filter((step) => (step.review?.status ?? 'pending') === 'pending').length;
+  const deferredCount = document.steps.filter((step) => step.review?.status === 'deferred').length;
+  if (pendingCount + deferredCount > 0) {
+    const parts = [pendingCount ? `${pendingCount} 步待改` : '', deferredCount ? `${deferredCount} 步暂缓` : ''].filter(Boolean).join('、');
+    checks.push({
+      id: 'review-incomplete',
+      severity: 'warning',
+      title: '审阅未完成，暂不能定稿',
+      detail: `尚有 ${parts}；全部步骤通过审阅后，才会给出可定稿判断。`,
+    });
+  } else {
+    checks.push({ id: 'proof-ok', severity: 'info', title: '结构与审阅均通过', detail: '未发现缺失引用、循环引用或未证明目标，全部步骤已通过审阅，可以定稿。' });
   }
   return checks;
 }
 
-export function compareVersion(document: ProofDocument, version: ProofVersion) {
-  const result = [];
+export function compareVersion(document: ProofDocument, version: ProofVersion): ProofDiff[] {
+  const result: ProofDiff[] = [];
   const size = Math.max(document.steps.length, version.steps.length);
   for (let index = 0; index < size; index += 1) {
-    const before = version.steps[index]?.statement ?? '';
-    const after = document.steps[index]?.statement ?? '';
-    const kind = !before ? 'added' : !after ? 'removed' : before === after ? 'same' : 'changed';
-    result.push({ kind, label: `步骤 ${index + 1}`, before, after } as const);
+    const beforeStep = version.steps[index] as ProofStep | undefined;
+    const afterStep = document.steps[index] as ProofStep | undefined;
+    const before = beforeStep?.statement ?? '';
+    const after = afterStep?.statement ?? '';
+    const beforeReview = formatReview(beforeStep?.review);
+    const afterReview = formatReview(afterStep?.review);
+    const reviewChanged = beforeReview !== afterReview;
+    const kind: ProofDiff['kind'] = !beforeStep
+      ? 'added'
+      : !afterStep
+        ? 'removed'
+        : before === after && !reviewChanged
+          ? 'same'
+          : 'changed';
+    result.push({
+      kind,
+      label: `步骤 ${index + 1}`,
+      before,
+      after,
+      reviewBefore: beforeStep && reviewChanged ? beforeReview : '',
+      reviewAfter: afterStep && reviewChanged ? afterReview : '',
+    });
   }
   return result;
 }

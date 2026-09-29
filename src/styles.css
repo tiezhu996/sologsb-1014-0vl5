@@ -113,6 +113,7 @@ button { font: inherit; }
 .check-summary-bars { height: 5px; margin: 14px 0 11px; border-radius: 4px; overflow: hidden; background: rgba(255,255,255,.16); }
 .check-summary-bars span { display: block; height: 100%; background: #6bd6ac; border-radius: inherit; transition: width .25s ease; }
 .check-summary p { margin: 0; font-size: 11px; color: rgba(255,255,255,.72); }
+.check-summary p.review-progress { margin-top: 6px; color: rgba(255,255,255,.6); }
 .editor-column { min-width: 0; display: grid; gap: 12px; }
 .editor-titlebar, .goal-card, .steps-toolbar, .step-card {
   background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
@@ -148,11 +149,16 @@ button { font: inherit; }
 }
 .step-id { font-family: Consolas, monospace; }
 .issue-badge { margin-left: auto; color: #9a6410; background: #fff2cf; }
+.review-tag { padding: 2px 8px; border-radius: 99px; font-size: 10px; font-weight: 700; }
+.review-tag.is-pending { color: #8a5c0b; background: #ffeec7; }
+.review-tag.is-approved { color: #1f7a52; background: #d9f2e6; }
+.review-tag.is-deferred { color: #52606f; background: #e7ecf2; }
 .step-menu { border: 0; color: #9aa4af; background: transparent; font-size: 17px; cursor: pointer; }
 .step-statement { margin: 12px 2px 10px; font: 18px/1.6 "Times New Roman", "Noto Serif SC", serif; overflow-x: auto; }
 .step-footer { display: flex; flex-wrap: wrap; gap: 8px; color: var(--muted); font-size: 10px; }
 .has-note, .has-branch { color: #2975ab; }
 .has-counterexample { color: #a56513; }
+.has-review { color: #1f7a52; }
 .empty-state { padding: 60px; text-align: center; color: var(--muted); background: #fff; border: 1px dashed var(--line); border-radius: 14px; }
 .inspector { max-height: calc(100vh - 102px); overflow-y: auto; padding-bottom: 12px; }
 .inspector > *:not(.panel-heading) { margin-left: 12px; margin-right: 12px; }
@@ -167,6 +173,18 @@ button { font: inherit; }
 .reference-item { display: grid; grid-template-columns: 16px 58px 1fr; align-items: center; gap: 3px; padding: 4px 5px; border-radius: 6px; background: #f7f9fb; font-size: 10px; }
 .reference-item small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
 .field-grid { display: grid; gap: 2px; }
+.review-box { margin-top: 14px; padding: 11px; border: 1px dashed #d5dde5; border-radius: 10px; background: #fafcfe; }
+.review-box .field-label:first-child { margin-top: 0; }
+.review-status-row { display: flex; gap: 6px; }
+.review-status-button {
+  flex: 1; height: 28px; border: 1px solid #d9e0e7; border-radius: 7px;
+  background: #fff; color: #677487; font-size: 11px; cursor: pointer;
+}
+.review-status-button:hover { border-color: #9db5c9; }
+.review-status-button.is-active.is-pending { border-color: #d9a83c; color: #8a5c0b; background: #fff3d6; font-weight: 700; }
+.review-status-button.is-active.is-approved { border-color: #3fae7f; color: #1f7a52; background: #dff5ea; font-weight: 700; }
+.review-status-button.is-active.is-deferred { border-color: #8a97a8; color: #4d5b6d; background: #e9edf3; font-weight: 700; }
+.review-updated { margin: 8px 0 0; color: var(--muted); font-size: 10px; }
 .add-symbol { margin-top: 12px !important; }
 .symbol-list { padding: 7px; display: grid; gap: 4px; }
 .symbol-row { display: grid; grid-template-columns: 58px 1fr; align-items: center; gap: 7px; }
@@ -199,6 +217,7 @@ kbd { padding: 2px 5px; border: 1px solid #c8d1da; border-bottom-width: 2px; bor
 .diff-row.is-changed span:nth-child(2) { background: #fff8e8; }
 .diff-row.is-changed span:nth-child(3) { background: #eef8f3; }
 .diff-label { color: #657385; background: #fafbfc; }
+.diff-review { display: block; margin-top: 6px; padding: 3px 6px; border-radius: 5px; color: #8a6d1f; background: rgba(217, 168, 60, .1); }
 .toast-notification { position: fixed; right: 24px; bottom: 24px; z-index: 80; padding: 11px 16px; border-radius: 9px; color: #fff; background: #173f60; box-shadow: 0 10px 30px rgba(17,47,70,.25); font-size: 12px; }
 
 @media (max-width: 1220px) {
