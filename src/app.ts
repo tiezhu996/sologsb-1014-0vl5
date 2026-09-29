@@ -1,7 +1,7 @@
 import m, { type Component } from 'mithril';
 import katex from 'katex';
-import { compareVersion, ProofStore, RULES } from './store';
-import type { ProofDocument, ProofStep } from './types';
+import { compareVersion, ProofStore, REVIEW_STATUS_LABELS, RULES } from './store';
+import type { ProofDocument, ProofStep, ReviewStatus, StepReview } from './types';
 
 const store = new ProofStore();
 
@@ -27,6 +27,8 @@ const typeLabel: Record<ProofStep['type'], string> = {
   goal: '目标 / 结论',
 };
 
+const reviewOrder: ReviewStatus[] = ['pending', 'approved', 'hold'];
+
 function renderRichText(text: string): m.Children {
   const parts = text.split(/(\$[^$]+\$)/g);
   return parts.map((part) => {
@@ -43,6 +45,19 @@ function renderRichText(text: string): m.Children {
 
 function shortId(id: string): string {
   return id.replace(/^step-/, '').slice(-4).toUpperCase();
+}
+
+function formatStamp(iso: string): string {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+}
+
+function reviewChip(review: StepReview): m.Children {
+  return m('span.review-chip', { class: `is-${review.status}` }, [
+    review.status === 'approved' ? '✓' : review.status === 'hold' ? '❚❚' : '✎',
+    REVIEW_STATUS_LABELS[review.status],
+    review.returnedAt && m('em.review-returned', '已退回'),
+  ]);
 }
 
 function download(name: string, content: string, mime: string): void {
@@ -65,6 +80,10 @@ function exportMarkdown(document: ProofDocument): string {
     if (step.note) lines.push(`- 旁注：${step.note}`);
     if (step.counterexample) lines.push(`- 反例：${step.counterexample}`);
     if (step.alternative) lines.push(`- 替代分支：${step.alternative}`);
+    // 送审稿只附已通过步骤的审阅意见。
+    if (step.review.status === 'approved') {
+      lines.push(`- 审阅意见（${step.review.reviewer || '未署名'} · ${formatStamp(step.review.reviewedAt) || '未记录时间'}）：${step.review.comment || '通过，无补充意见。'}`);
+    }
     lines.push('');
   });
   lines.push('## 符号表');
@@ -79,6 +98,10 @@ function exportLatex(document: ProofDocument): string {
     const support = refs.length ? `（依据 ${refs.join(', ')}；${step.rule}）` : `（${step.rule}）`;
     lines.push(`  \\item ${step.statement} ${support}`);
     if (step.note) lines.push(`  \\par\\small 旁注：${step.note}`);
+    // 送审稿只附已通过步骤的审阅意见。
+    if (step.review.status === 'approved') {
+      lines.push(`  \\par\\small 审阅意见（${step.review.reviewer || '未署名'}）：${step.review.comment || '通过，无补充意见。'}`);
+    }
   });
   lines.push('\\end{enumerate}', '\\end{document}');
   return lines.join('\n');
@@ -139,14 +162,54 @@ export class ProofApp implements Component {
     window.removeEventListener('keydown', this.onKeyDown);
   }
 
+  reviewEditor(selected: ProofStep): m.Children {
+    const review = selected.review;
+    const author = store.current.author;
+    return m('div.review-editor', [
+      m('label.field-label', '审阅状态'),
+      m('div.review-switch', reviewOrder.map((status) => m('button.review-option', {
+        class: review.status === status ? `is-active is-${status}` : '',
+        onclick: () => { store.setReview(status); m.redraw(); },
+        title: status === 'pending' ? '退回待改' : status === 'approved' ? '审阅通过' : '暂缓处理',
+      }, REVIEW_STATUS_LABELS[status]))),
+      m('label.field-label', '审阅人'),
+      m('input.input.is-small.review-reviewer', {
+        value: review.reviewer,
+        placeholder: author ? `${author}（可修改）` : '输入审阅人姓名',
+        onfocus: (event: Event) => { store.lastInput = event.target as HTMLInputElement; },
+        oninput: (event: Event) => store.setReview(review.status, { reviewer: (event.target as HTMLInputElement).value }),
+      }),
+      m('label.field-label', '修改建议 / 审阅意见'),
+      m('textarea.textarea.is-small.review-comment', {
+        rows: 2,
+        value: review.comment,
+        placeholder: review.status === 'approved' ? '记录通过理由（可选）' : '写明需要修改的问题或暂缓原因',
+        oninput: (event: Event) => store.setReview(review.status, { comment: (event.target as HTMLTextAreaElement).value }),
+      }),
+      (review.reviewedAt || review.returnedAt) && m('p.review-meta',
+        review.returnedAt
+          ? [`曾通过，编辑后于 ${formatStamp(review.returnedAt)} 自动退回待改，原意见保留`]
+          : [`${REVIEW_STATUS_LABELS[review.status]}于 ${formatStamp(review.reviewedAt)}`, review.reviewer ? ` · ${review.reviewer}` : ''],
+      ),
+    ]);
+  }
+
   view(): m.Children {
     const document = store.current;
     const selected = store.selectedStep;
     const checks = store.checks;
     const errors = checks.filter((check) => check.severity === 'error').length;
     const warnings = checks.filter((check) => check.severity === 'warning').length;
+    const summary = store.reviewSummary;
     const selectedVersion = document.versions.find((version) => version.id === store.compareVersionId);
     const diff = selectedVersion ? compareVersion(document, selectedVersion) : [];
+    const reviewChangeCount = diff.filter((item) => item.reviewChanged && item.beforeId && item.afterId && item.beforeId === item.afterId).length;
+    const headState = errors ? 'has-error' : summary.finalizable ? 'is-ok' : 'is-waiting';
+    const headCopy = errors
+      ? `${errors} 个结构错误`
+      : summary.finalizable
+        ? '全部步骤通过审阅，可定稿'
+        : `审阅进行中 ${summary.approved}/${summary.total}`;
 
     return m('div.app-shell', [
       m('header.topbar', [
@@ -155,8 +218,8 @@ export class ProofApp implements Component {
           m('div', [m('p.eyebrow', 'FORMAL NOTEBOOK'), m('h1', '格致 · 证明编辑器')]),
         ]),
         m('div.topbar-center', [
-          m('span.status-dot', { class: errors ? 'has-error' : 'is-ok' }),
-          errors ? `${errors} 个结构错误` : '证明结构可检查',
+          m('span.status-dot', { class: headState }),
+          headCopy,
           m('span.topbar-separator'),
           `自动保存于 ${new Date(document.updatedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`,
         ]),
@@ -181,14 +244,17 @@ export class ProofApp implements Component {
           ]),
           m('section.panel.version-panel', [
             m('div.panel-heading', [m('span', '版本快照'), m('span.count-badge', document.versions.length)]),
-            document.versions.length === 0 && m('p.empty-copy', '保存快照后，可以并排查看改动。'),
-            m('div.version-list', document.versions.map((version) => m('button.version-item', {
-              class: version.id === store.compareVersionId ? 'is-active' : '',
-              onclick: () => { store.compareVersionId = store.compareVersionId === version.id ? '' : version.id; m.redraw(); },
-            }, [
-              m('span', version.name),
-              m('small', new Date(version.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })),
-            ]))),
+            document.versions.length === 0 && m('p.empty-copy', '保存快照后，可以并排查看改动（含审阅变化）。'),
+            m('div.version-list', document.versions.map((version) => {
+              const approved = version.steps.filter((step) => step.review.status === 'approved').length;
+              return m('button.version-item', {
+                class: version.id === store.compareVersionId ? 'is-active' : '',
+                onclick: () => { store.compareVersionId = store.compareVersionId === version.id ? '' : version.id; m.redraw(); },
+              }, [
+                m('span', [version.name, m('small.version-review', `审阅通过 ${approved}/${version.steps.length}`)]),
+                m('small', new Date(version.createdAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })),
+              ]);
+            })),
             m('button.button.is-fullwidth.is-small', { onclick: () => { store.createVersion(); m.redraw(); } }, '＋ 保存当前版本'),
           ]),
           m('section.check-summary', [
@@ -196,10 +262,21 @@ export class ProofApp implements Component {
               m('div', [m('span.eyebrow', 'LIVE CHECK'), m('h2', '证明检查')]),
               m('span.check-total', { class: errors ? 'has-error' : '' }, errors + warnings),
             ]),
+            m('div.review-counts', reviewOrder.map((status) => m('span.review-pill', { class: `is-${status}` }, [
+              REVIEW_STATUS_LABELS[status],
+              m('strong', String(summary[status])),
+            ]))),
             m('div.check-summary-bars', [
-              m('span', { style: { width: `${Math.max(8, 100 - errors * 24 - warnings * 12)}%` } }),
+              m('span', { style: { width: `${Math.max(8, 100 - errors * 24 - warnings * 8)}%` } }),
             ]),
-            m('p', errors ? '修正错误后再保存为定稿。' : warnings ? '结构有效，仍有待核对项。' : '当前结构与引用关系完整。'),
+            m('p', summary.finalizable
+              ? `✓ ${summary.total} 个步骤全部通过审阅，可以定稿送审。`
+              : summary.hold
+                ? `${summary.pending} 步待改、${summary.hold} 步暂缓，暂不能定稿。`
+                : `${summary.pending} 步待改，全部通过后方可定稿。`),
+            summary.finalizable
+              ? m('div.finalize-badge', '✓ 可定稿')
+              : m('div.finalize-badge.is-blocked', '● 未定稿'),
           ]),
         ]),
         m('section.editor-column', [
@@ -235,7 +312,7 @@ export class ProofApp implements Component {
             const stepChecks = checks.filter((check) => check.stepId === step.id);
             return m('article.step-card', {
               'data-step': step.id,
-              class: step.id === store.selectedStepId ? 'is-selected' : '',
+              class: [step.id === store.selectedStepId ? 'is-selected' : '', `review-${step.review.status}`].join(' '),
               draggable: true,
               onclick: () => { store.selectStep(step.id); m.redraw(); },
               ondragstart: () => { store.dragStepId = step.id; },
@@ -250,6 +327,8 @@ export class ProofApp implements Component {
                 m('div.step-head', [
                   m('span.tag', { class: step.type === 'goal' ? 'is-success' : step.type === 'premise' ? 'is-info' : 'is-light' }, typeLabel[step.type]),
                   m('span.rule-chip', step.rule),
+                  reviewChip(step.review),
+                  step.review.reviewer && m('span.review-by', step.review.reviewer),
                   m('span.step-id', `#${shortId(step.id)}`),
                   stepChecks.length > 0 && m('span.issue-badge', `${stepChecks.length} 项检查`),
                   m('button.step-menu', { onclick: (event: Event) => { event.stopPropagation(); store.removeStep(step.id); m.redraw(); }, title: '删除步骤' }, '×'),
@@ -263,6 +342,7 @@ export class ProofApp implements Component {
                   step.note && m('span.has-note', '含旁注'),
                   step.counterexample && m('span.has-counterexample', '含反例'),
                   step.alternative && m('span.has-branch', '含替代分支'),
+                  step.review.comment && m('span.review-quote', { class: `is-${step.review.status}` }, `审阅：${step.review.comment}`),
                 ]),
               ]),
             ]);
@@ -292,8 +372,12 @@ export class ProofApp implements Component {
                 const end = input.selectionEnd ?? start;
                 const next = input.value.slice(0, start) + snippet.value + input.value.slice(end);
                 input.value = next;
-                if (input instanceof HTMLTextAreaElement) store.updateStep({ statement: next });
-                else store.update((document) => { document.goal = next; });
+                if (input instanceof HTMLTextAreaElement) {
+                  if (input.classList.contains('review-comment')) store.setReview(selected.review.status, { comment: next });
+                  else store.updateStep({ statement: next });
+                } else if (input.classList.contains('review-reviewer')) {
+                  store.setReview(selected.review.status, { reviewer: next });
+                } else store.update((document) => { document.goal = next; });
                 input.focus();
                 const cursor = start + snippet.value.length;
                 input.setSelectionRange(cursor, cursor);
@@ -319,6 +403,7 @@ export class ProofApp implements Component {
               m('div', [m('label.field-label', '反例 / 边界情况'), m('textarea.textarea.is-small', { rows: 2, value: selected.counterexample, placeholder: '尝试寻找反例', oninput: (event: Event) => store.updateStep({ counterexample: (event.target as HTMLTextAreaElement).value }) })]),
               m('div', [m('label.field-label', '替代分支'), m('textarea.textarea.is-small', { rows: 2, value: selected.alternative, placeholder: '另一种可行推导', oninput: (event: Event) => store.updateStep({ alternative: (event.target as HTMLTextAreaElement).value }) })]),
             ]),
+            this.reviewEditor(selected),
             m('button.button.is-small.is-white.is-fullwidth.add-symbol', {
               onclick: () => {
                 const symbol = window.prompt('输入符号名称');
@@ -338,6 +423,14 @@ export class ProofApp implements Component {
           ]),
           m('section.panel.checks-panel', [
             m('div.panel-heading', [m('span', '检查结果'), m('span.count-badge', checks.length)]),
+            summary.total > 0 && !summary.finalizable && m('div.gate-banner', [
+              m('strong', '暂不能定稿'),
+              m('small', `还有 ${summary.pending} 步待改${summary.hold ? `、${summary.hold} 步暂缓` : ''}，通过后导出送审稿。`),
+            ]),
+            summary.finalizable && m('div.gate-banner.is-ok', [
+              m('strong', '可定稿送审'),
+              m('small', '全部步骤已通过审阅，导出文件将附带各步审阅意见。'),
+            ]),
             m('div.check-list', checks.map((check) => m('button.check-item', {
               class: check.severity,
               onclick: () => { if (check.stepId) { store.selectStep(check.stepId); globalThis.document.querySelector(`[data-step="${check.stepId}"]`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }); } m.redraw(); },
@@ -364,15 +457,31 @@ export class ProofApp implements Component {
             m('span.tag.is-danger', `删除 ${diff.filter((item) => item.kind === 'removed').length}`),
             m('span.tag.is-success', `新增 ${diff.filter((item) => item.kind === 'added').length}`),
             m('span.tag.is-warning', `修改 ${diff.filter((item) => item.kind === 'changed').length}`),
+            m('span.tag.is-info', `审阅变化 ${reviewChangeCount}`),
             m('span.tag.is-light', `未变 ${diff.filter((item) => item.kind === 'same').length}`),
           ]),
           m('div.diff-table', [
-            m('div.diff-row.diff-header', [m('span', '位置'), m('span', '旧版本'), m('span', '当前版本')]),
-            ...diff.map((item) => m('div.diff-row', { class: `is-${item.kind}` }, [
-              m('span.diff-label', item.label),
-              m('span', item.before || '—'),
-              m('span', item.after || '—'),
-            ])),
+            m('div.diff-row.diff-header', [m('span', '位置'), m('span', '旧版本'), m('span', '当前版本'), m('span', '审阅变化')]),
+            ...diff.map((item) => {
+              const samePosition = item.beforeId && item.afterId && item.beforeId === item.afterId;
+              const reviewCell = samePosition
+                ? m('span.diff-review', { class: item.reviewChanged ? 'is-changed' : '' }, item.reviewChanged
+                  ? [
+                      m('span.review-chip.is-mini', { class: `is-${item.beforeReview?.status ?? 'pending'}` }, REVIEW_STATUS_LABELS[item.beforeReview?.status ?? 'pending']),
+                      ' → ',
+                      m('span.review-chip.is-mini', { class: `is-${item.afterReview?.status ?? 'pending'}` }, REVIEW_STATUS_LABELS[item.afterReview?.status ?? 'pending']),
+                      (item.beforeReview?.reviewer !== item.afterReview?.reviewer || item.beforeReview?.comment !== item.afterReview?.comment)
+                        && m('small', '审阅人或意见有修改'),
+                    ]
+                  : [m('span.review-chip.is-mini', { class: `is-${item.afterReview?.status ?? 'pending'}` }, REVIEW_STATUS_LABELS[item.afterReview?.status ?? 'pending']), m('small', '无变化')])
+                : m('span.diff-review', '—');
+              return m('div.diff-row', { class: `is-${item.kind}${item.reviewChanged && samePosition ? ' review-changed' : ''}` }, [
+                m('span.diff-label', item.label),
+                m('span', item.before || '—'),
+                m('span', item.after || '—'),
+                reviewCell,
+              ]);
+            }),
           ]),
         ]),
       ]),
